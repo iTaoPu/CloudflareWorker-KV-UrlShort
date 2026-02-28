@@ -1,6 +1,5 @@
 // Cloudflare Worker
-// 使用 Cloudflare KV 存储短链接数据
-// 绑定变量：URL_SHORT_KV, TURNSTILE_SITE_KEY, TURNSTILE_SECRET
+// This worker uses Cloudflare KV for storing URL data
 
 addEventListener("fetch", (event) => {
   event.respondWith(handleRequest(event.request));
@@ -45,7 +44,7 @@ async function serveFrontend() {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>短链接生成器</title>
-    <link href="https://fastly.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔗</text></svg>">
     ${turnstileScript}
 </head>
@@ -59,12 +58,13 @@ async function serveFrontend() {
                 </span>
             </h1>
             <p class="text-gray-600 text-lg mb-4">简单、安全的链接缩短服务</p>
-            <a target="_blank" 
+            <a href="https://github.com/iTaoPu/CloudflareWorker-KV-UrlShort" 
+               target="_blank" 
                class="inline-flex items-center px-4 py-2 rounded-full bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
                 <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd"></path>
                 </svg>
-                赛博活佛部署项目
+                自部署开源地址
             </a>
         </div>
         
@@ -154,9 +154,8 @@ async function serveFrontend() {
       
       let token;
       try {
-        // 确保 turnstile 对象存在
-        token = typeof turnstile !== 'undefined' ? turnstile.getResponse() : null;
-        if (TURNSTILE_SITE_KEY && !token) {
+        token = turnstile.getResponse();
+        if (!token) {
           document.getElementById('result').innerHTML = \`<div class="p-4 bg-red-50 rounded-lg"><p class="text-red-800">请完成人机验证</p></div>\`;
           return;
         }
@@ -194,14 +193,7 @@ async function serveFrontend() {
                     expiryDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
                     break;
                 case 'custom':
-                    // 将本地时间字符串转换为 ISO 字符串（包含时区偏移）
-                    const localDate = document.getElementById('customExpiry').value;
-                    if (localDate) {
-                        // 构造本地时间的 Date 对象（注意：new Date(localDate) 会被解析为 UTC，所以需要手动处理）
-                        const [year, month, day] = localDate.split('-').map(Number);
-                        const [hour, minute] = document.getElementById('customExpiry').value.split('T')[1].split(':').map(Number);
-                        expiryDate = new Date(year, month-1, day, hour, minute);
-                    }
+                    expiryDate = document.getElementById('customExpiry').value;
                     break;
             }
         }
@@ -209,7 +201,7 @@ async function serveFrontend() {
         const formData = {
             url: document.getElementById('url').value,
             slug: document.getElementById('slug').value,
-            expiry: expiryDate ? expiryDate.toISOString() : null, // 统一传递 ISO 字符串
+            expiry: expiryDate,
             password: document.getElementById('password').value,
             maxVisits: document.getElementById('maxVisits').value,
             token: token
@@ -247,10 +239,7 @@ async function serveFrontend() {
               <p class="text-red-800">\${data.error}</p>
             </div>
           \`;
-          // 重置 Turnstile
-          if (typeof turnstile !== 'undefined') {
-            turnstile.reset();
-          }
+          turnstile.reset();
         }
       } catch (error) {
         resultDiv.innerHTML = \`
@@ -258,9 +247,7 @@ async function serveFrontend() {
             <p class="text-red-800">生成短链接时发生错误，请重试</p>
           </div>
         \`;
-        if (typeof turnstile !== 'undefined') {
-          turnstile.reset();
-        }
+        turnstile.reset();
       }
       
       // 恢复提交按钮状态
@@ -360,43 +347,33 @@ async function handleAPIRequest(request) {
         }
       }
 
-      // 生成或使用自定义短链，并确保唯一性
-      let shortSlug;
-      if (slug) {
-        // 自定义短链验证
-        if (slug.length < 3) {
-          return new Response(JSON.stringify({ error: "自定义链接至少需要3个字符" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (!/^[a-zA-Z0-9-_]+$/.test(slug)) {
-          return new Response(JSON.stringify({ error: "自定义链接格式无效，只能使用字母、数字、横线和下划线" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        // 检查是否存在
-        const existing = await URL_SHORT_KV.get(slug);
-        if (existing) {
-          return new Response(JSON.stringify({ error: "该自定义链接已被使用" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        shortSlug = slug;
-      } else {
-        // 生成唯一短链，最多尝试10次
-        shortSlug = await generateUniqueSlug();
-        if (!shortSlug) {
-          return new Response(JSON.stringify({ error: "系统繁忙，请稍后重试" }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
+      // 移除URL检查代码，直接生成新的短链接
+      const shortSlug = slug || generateSlug();
+      
+      // 添加自定义短链接长度验证
+      if (slug && slug.length < 3) {
+        return new Response(JSON.stringify({ error: "自定义链接至少需要3个字符" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
-      // 存储数据
+      // Validate slug format
+      if (!/^[a-zA-Z0-9-_]+$/.test(shortSlug)) {
+        return new Response(JSON.stringify({ error: "自定义链接格式无效，只能使用字母、数字、横线和下划线" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const existing = await URL_SHORT_KV.get(shortSlug);
+      if (existing) {
+        return new Response(JSON.stringify({ error: "该自定义链接已被使用" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       const expiryTimestamp = expiry ? new Date(expiry).getTime() : null;
       await URL_SHORT_KV.put(shortSlug, JSON.stringify({ 
         url, 
@@ -435,8 +412,7 @@ async function handleAPIRequest(request) {
         });
       }
 
-      const data = JSON.parse(record);
-      const { password: correctPassword, url, maxVisits, visits = 0 } = data;
+      const { password: correctPassword, url, maxVisits, visits = 0 } = JSON.parse(record);
       const { password: inputPassword, token } = await request.json();
 
       // 验证 Turnstile token
@@ -457,27 +433,13 @@ async function handleAPIRequest(request) {
         }
       }
 
-      // 检查访问次数是否已达上限
-      if (maxVisits && visits >= maxVisits) {
-        // 可选的：立即删除记录
-        await URL_SHORT_KV.delete(slug);
-        return new Response(JSON.stringify({ error: "链接访问次数已达上限" }), {
-          status: 410,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
       if (inputPassword === correctPassword) {
-        // 密码正确，更新访问次数
-        const newVisits = visits + 1;
-        await URL_SHORT_KV.put(slug, JSON.stringify({
-          ...data,
-          visits: newVisits
-        }));
-
-        // 如果达到上限，立即删除
-        if (maxVisits && newVisits >= maxVisits) {
-          await URL_SHORT_KV.delete(slug);
+        if (maxVisits) {
+          const newVisits = visits + 1;
+          await URL_SHORT_KV.put(slug, JSON.stringify({
+            ...JSON.parse(record),
+            visits: newVisits
+          }));
         }
 
         return new Response(JSON.stringify({ 
@@ -544,10 +506,6 @@ async function handleRedirect(pathname) {
     if (maxVisits && !password) {
       data.visits = visits + 1;
       await URL_SHORT_KV.put(slug, JSON.stringify(data));
-      // 如果达到上限，立即删除
-      if (data.visits >= maxVisits) {
-        await URL_SHORT_KV.delete(slug);
-      }
     }
 
     if (password) {
@@ -597,16 +555,9 @@ async function handleRedirect(pathname) {
             submitButton.textContent = '验证中...';
             errorDiv.textContent = '';
             
-            let token = null;
-            try {
-              token = typeof turnstile !== 'undefined' ? turnstile.getResponse() : null;
-            } catch (e) {
-              console.error('Turnstile error:', e);
-            }
+            const token = TURNSTILE_SITE_KEY ? turnstile.getResponse() : null;
             if (TURNSTILE_SITE_KEY && !token) {
               errorDiv.textContent = "请完成人机验证";
-              submitButton.disabled = false;
-              submitButton.textContent = '访问链接';
               return;
             }
             
@@ -627,17 +578,14 @@ async function handleRedirect(pathname) {
               if (data.success) {
                 window.location.href = data.url;
               } else {
-                errorDiv.textContent = data.error || "密码错误";
+                errorDiv.textContent = "密码错误";
                 // 重置 Turnstile
-                if (typeof turnstile !== 'undefined') {
-                  turnstile.reset();
-                }
+                turnstile.reset();
               }
             } catch (error) {
               errorDiv.textContent = "发生错误，请重试";
-              if (typeof turnstile !== 'undefined') {
-                turnstile.reset();
-              }
+              // 发生错误时也重置 Turnstile
+              turnstile.reset();
             } finally {
               submitButton.disabled = false;
               submitButton.textContent = '访问链接';
@@ -665,20 +613,13 @@ async function handleRedirect(pathname) {
   }
 }
 
-/**
- * 生成随机短链，确保唯一性
- * 最多尝试 MAX_ATTEMPTS 次，若失败返回 null
- */
-async function generateUniqueSlug(length = 6, maxAttempts = 10) {
+function generateSlug(length = 6) {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const slug = Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-    const existing = await URL_SHORT_KV.get(slug);
-    if (!existing) {
-      return slug;
-    }
-  }
-  return null;
+  return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+function onloadTurnstileCallback() {
+  console.log('Turnstile loaded successfully');
 }
 
 async function validateTurnstileToken(token) {
